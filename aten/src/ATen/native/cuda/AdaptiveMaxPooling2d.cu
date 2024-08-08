@@ -113,41 +113,56 @@ __global__ void adaptivemaxgradinput(T *gradInput, const T *gradOutput, const in
                              int isizeH, int isizeW,
                              int osizeH, int osizeW)
 {
-  // iterators
-  int oh, ow;
+    extern __shared__ T sharedGrad[];
+    int threadId = threadIdx.y * blockDim.x + threadIdx.x;
 
-  // compute offsets based on thread/block ID
-  int o_plane = blockIdx.x;
-  int i_plane = o_plane;
-  //int k = blockIdx.x % sizeD;
+    int o_plane = blockIdx.x;
+    int i_plane = o_plane;
 
-  int ostartW = threadIdx.x;
-  int oendW = osizeW;
-  int ostepW = blockDim.x;
+    int ostartW = threadIdx.x;
+    int oendW = osizeW;
+    int ostepW = blockDim.x;
 
-  int ostartH = blockDim.y*blockIdx.y + threadIdx.y;
-  int oendH = osizeH;
-  int ostepH = blockDim.y*gridDim.y;
+    int ostartH = blockDim.y * blockIdx.y + threadIdx.y;
+    int oendH = osizeH;
+    int ostepH = blockDim.y * gridDim.y;
 
-  // select input/output plane
-  gradOutput = gradOutput + o_plane*osizeH*osizeW;
-  gradInput = gradInput + i_plane*isizeH*isizeW;
-  indices = indices + o_plane*osizeH*osizeW;
+    gradOutput = gradOutput + o_plane * osizeH * osizeW;
+    gradInput = gradInput + i_plane * isizeH * isizeW;
+    indices = indices + o_plane * osizeH * osizeW;
 
-  // compute gradInput
-  for(oh = ostartH; oh < oendH; oh += ostepH) {
+    sharedGrad[threadId] = 0; // Needs to be allocated somewhere ig
+    __syncthreads();
 
-    for(ow = ostartW; ow < oendW; ow += ostepW) {
+    T localAccum = 0;
+    for (int oh = ostartH; oh < oendH; oh += ostepH)
+    {
+        for (int ow = ostartW; ow < oendW; ow += ostepW)
+        {
+            const T *ptr_gradOutput = gradOutput + oh * osizeW + ow;
+            const int64_t *ptr_ind = indices + oh * osizeW + ow;
+            T z = *ptr_gradOutput;
+            int argmax = (*ptr_ind);
 
-      const T *ptr_gradOutput = gradOutput + oh*osizeW + ow;
-      const int64_t *ptr_ind = indices + oh*osizeW + ow;
-      T z = *ptr_gradOutput;
-
-      int argmax = (*ptr_ind);
-
-      gradInput[argmax] += z;
+            if (argmax == threadId) {
+                localAccum += z;
+            }
+        }
     }
-  }
+
+    atomicAdd(&sharedGrad[threadId], localAccum);
+    __syncthreads();
+
+    if (threadId == 0)
+    {
+        for (int i = 0; i < blockDim.x * blockDim.y; ++i)
+        {
+            if (sharedGrad[i] != 0)
+            {
+                atomicAdd(&gradInput[i], sharedGrad[i]);
+            }
+        }
+    }
 }
 
 /*
@@ -341,8 +356,8 @@ TORCH_IMPL_FUNC(adaptive_max_pool2d_backward_out_cuda)
     return;
   }
 
-  bool atomic =
-      true; // suboptimal, but without atomic it doesn't pass the tests
+  // bool atomic =
+  //     true; // suboptimal, but without atomic it doesn't pass the tests
 
   const at::Tensor gradOutput_ = gradOutput.contiguous();
   const at::Tensor indices_ = indices.contiguous();
@@ -356,7 +371,7 @@ TORCH_IMPL_FUNC(adaptive_max_pool2d_backward_out_cuda)
     int64_t osizeH = gradOutput_.size(1);
     int64_t osizeW = gradOutput_.size(2);
 
-    // bool atomic = (isizeH%osizeH != 0) || (isizeW%osizeW != 0);
+    bool atomic = (isizeH%osizeH != 0) || (isizeW%osizeW != 0);
 
     gradInput_c.zero_();
 
@@ -419,7 +434,7 @@ TORCH_IMPL_FUNC(adaptive_max_pool2d_backward_out_cuda)
 
     gradInput_c.zero_();
 
-    // bool atomic = (isizeH%osizeH != 0) || (isizeW%osizeW != 0);
+    bool atomic = (isizeH%osizeH != 0) || (isizeW%osizeW != 0);
 
     AT_DISPATCH_FLOATING_TYPES_AND2(
         kHalf,
