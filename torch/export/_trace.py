@@ -2087,4 +2087,10 @@ def _export(
         verifiers=[Verifier],
     )
 
+    # Remove Proxy because they cannot be deepcopied or pickled.
+    if hasattr(exported_program, "state_dict"):
+        torch._export.utils.remove_proxy_from_state_dict(
+                exported_program.state_dict, in_place=True
+        )
+
     return exported_program
