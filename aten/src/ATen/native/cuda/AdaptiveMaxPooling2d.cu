@@ -131,7 +131,7 @@ __global__ void adaptivemaxgradinput(T *gradInput, const T *gradOutput, const in
     gradInput = gradInput + i_plane * isizeH * isizeW;
     indices = indices + o_plane * osizeH * osizeW;
 
-    sharedGrad[threadId] = 0; // Needs to be allocated somewhere ig
+    sharedGrad[threadId] = 0; 
     __syncthreads();
 
     T localAccum = 0;
@@ -407,11 +407,12 @@ TORCH_IMPL_FUNC(adaptive_max_pool2d_backward_out_cuda)
                 osizeW);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
           } else {
-            // run updateGradInput kernel
-            atomicadaptivemaxgradinput<<<
+            // run updateGradInput kernel, allocate memory for shared grad
+            int sharedMemSize = blockDim.x * blockDim.y * sizeof(T);
+            adaptivemaxgradinput<<<
                 blocks,
                 threads,
-                0,
+                sharedMemSize,
                 at::cuda::getCurrentCUDAStream()>>>(
                 gradInput_data,
                 gradOutput_data,
@@ -468,11 +469,12 @@ TORCH_IMPL_FUNC(adaptive_max_pool2d_backward_out_cuda)
                 osizeW);
             C10_CUDA_KERNEL_LAUNCH_CHECK();
           } else {
-            // run updateGradInput kernel, accumulate gradients atomically
+            // run updateGradInput kernel, allocate memory for shared grad
+            int sharedMemSize = blockDim.x * blockDim.y * sizeof(T);
             adaptivemaxgradinput<<<
                 blocks,
                 threads,
-                0,
+                sharedMemSize,
                 at::cuda::getCurrentCUDAStream()>>>(
                 gradInput_data,
                 gradOutput_data,
